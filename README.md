@@ -55,3 +55,21 @@ Project Organization
 --------
 
 <p><small>Project based on the <a target="_blank" href="https://drivendata.github.io/cookiecutter-data-science/">cookiecutter data science project template</a>. #cookiecutterdatascience</small></p>
+
+## Reference
+https://github.com/hermanmichaels/transformer_example
+
+## Set up project
+
+```bash
+pip install -r requirements.txt
+pre-commit install
+pre-commit run --all-files
+```
+
+## Training pipeline
+
+1. src/data/generate_data.py
+2. src/data/make_dataset.py
+3. src/models/train_model.py
+4. src/models/predict_model.py
