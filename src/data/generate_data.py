@@ -1,56 +1,50 @@
 import logging
 
 import numpy as np
-from scipy.ndimage import gaussian_filter1d
 # import click
-from scipy.stats import cauchy
+from scipy.stats import levy_stable
 
-from src.config import (DATA_TYPE, FINAL_SCALE, INITIAL_FRAC_BOUNDS,
-                        INITIAL_SCALE, INTERVAL, N_TIME_SERIES, RANDOM_STATE,
-                        RAW_DATA_PATH, SIGMA, TIME_SERIES_LENGTH,
-                        TRANSITION_FRAC_BOUNDS)
+from src.config import (DATA_TYPE, FINAL_ALPHA, INITIAL_ALPHA,
+                        INITIAL_FRAC_BOUNDS, N_TIME_SERIES, NUM_FEATURES,
+                        RANDOM_STATE, RAW_DATA_PATH, SEQUENCE_LENGTH,
+                        SINE_INTERVAL, TRANSITION_FRAC_BOUNDS)
 
 
-def generate_non_stationary_time_series(length, initial_scale, final_scale, initial_frac, transition_frac, sigma, type):
+def generate_non_stationary_sequence(length, initial_alpha, final_alpha, initial_frac, transition_frac, type):
     initial_length = int(length * initial_frac)
     transition_length = int(length * transition_frac)
     final_length = length - initial_length - transition_length
 
-    scales = np.concatenate([
-        np.repeat(initial_scale, initial_length),
-        np.linspace(initial_scale, final_scale, transition_length),
-        np.repeat(final_scale, final_length)
+    alphas = np.concatenate([
+        np.repeat(initial_alpha, initial_length),
+        np.linspace(initial_alpha, final_alpha, transition_length),
+        np.repeat(final_alpha, final_length)
     ])
 
-    if type == 'cauchy':
-        time_series = cauchy.rvs(loc=0, scale=scales, size=length)
-        time_series = gaussian_filter1d(time_series, sigma=sigma)
+    if type == 'random':
+        sequence = levy_stable.rvs(alpha=alphas, beta=0)
     elif type == 'sine':
-        x = np.linspace(0, length * INTERVAL, length)
+        x = np.linspace(0, length * SINE_INTERVAL, length)
         y = np.sin(x) + np.random.normal(0, 0.1, x.shape)
-        time_series = y * scales
-    else:
-        raise AttributeError(f'Type {type} is not supported.')
+        sequence = y * alphas
 
-    return time_series
+    return sequence
 
 
-def generate_data(n, length, initial_scale, final_scale, initial_frac_bounds, transition_frac_bounds, sigma):
-    num_features = 1
-    sequences = np.empty((n, length, num_features))
+def generate_data(n, length, initial_alpha, final_alpha, initial_frac_bounds, transition_frac_bounds):
+    sequences = np.empty((n, length, NUM_FEATURES))
 
     initial_fracs = np.random.uniform(low=initial_frac_bounds[0], high=initial_frac_bounds[1], size=n)
     transition_fracs = np.random.uniform(low=transition_frac_bounds[0], high=transition_frac_bounds[1], size=n)
 
     for i, initial_frac, transition_frac in zip(range(n), initial_fracs, transition_fracs):
         # [sequence_length, num_features]
-        ts = generate_non_stationary_time_series(
+        ts = generate_non_stationary_sequence(
             length=length,
-            initial_scale=initial_scale,
-            final_scale=final_scale,
+            initial_alpha=initial_alpha,
+            final_alpha=final_alpha,
             initial_frac=initial_frac,
             transition_frac=transition_frac,
-            sigma=sigma,
             type=DATA_TYPE
         )
         sample = np.asarray([ts]).swapaxes(0, 1)
@@ -65,9 +59,10 @@ def generate_data(n, length, initial_scale, final_scale, initial_frac_bounds, tr
 # @click.argument('final_scale', type=float)
 # @click.option('--seed', type=int, default=None, help="Random seed for reproducibility (optional).")
 def main():
-    """ Generates a non-stationary time series with varying scale.
+    """ Generates a non-stationary sequence with varying stability.
     """
     logger = logging.getLogger(__name__)
+
     logger.info('Generating data')
 
     if RANDOM_STATE is not None:
@@ -75,12 +70,11 @@ def main():
 
     data = generate_data(
         n=N_TIME_SERIES,
-        length=TIME_SERIES_LENGTH,
-        initial_scale=INITIAL_SCALE,
-        final_scale=FINAL_SCALE,
+        length=SEQUENCE_LENGTH,
+        initial_alpha=INITIAL_ALPHA,
+        final_alpha=FINAL_ALPHA,
         initial_frac_bounds=INITIAL_FRAC_BOUNDS,
-        transition_frac_bounds=TRANSITION_FRAC_BOUNDS,
-        sigma=SIGMA
+        transition_frac_bounds=TRANSITION_FRAC_BOUNDS
     )
 
     logger.info('Saving data')

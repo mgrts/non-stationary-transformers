@@ -1,92 +1,41 @@
 import logging
 
 import numpy as np
-from scipy.ndimage import gaussian_filter1d
-# import click
-from scipy.stats import cauchy
+import torch
+from sklearn.model_selection import train_test_split
+from torch.utils.data import TensorDataset
 
-from src.config import (DATA_TYPE, FINAL_SCALE, INITIAL_FRAC_BOUNDS,
-                        INITIAL_SCALE, INTERVAL, N_TIME_SERIES, RANDOM_STATE,
-                        RAW_DATA_PATH, SIGMA, TIME_SERIES_LENGTH,
-                        TRANSITION_FRAC_BOUNDS)
+from src.config import INTERIM_DATA_PATH, TEST_DATA_PATH, TRAIN_DATA_PATH
 
 
-def generate_non_stationary_time_series(length, initial_scale, final_scale, initial_frac, transition_frac, sigma, type):
-    initial_length = int(length * initial_frac)
-    transition_length = int(length * transition_frac)
-    final_length = length - initial_length - transition_length
+def make_datasets(sequences: np.ndarray) -> tuple[TensorDataset, TensorDataset]:
+    """Create train and test dataset.
 
-    scales = np.concatenate([
-        np.repeat(initial_scale, initial_length),
-        np.linspace(initial_scale, final_scale, transition_length),
-        np.repeat(final_scale, final_length)
-    ])
+    Args:
+        sequences: sequences to use [num_sequences, sequence_length, num_features]
 
-    if type == 'cauchy':
-        time_series = cauchy.rvs(loc=0, scale=scales, size=length)
-        time_series = gaussian_filter1d(time_series, sigma=sigma)
-    elif type == 'sine':
-        x = np.linspace(0, length * INTERVAL, length)
-        y = np.sin(x) + np.random.normal(0, 0.1, x.shape)
-        time_series = y * scales
-    else:
-        raise AttributeError(f'Type {type} is not supported.')
-
-    return time_series
-
-
-def generate_data(n, length, initial_scale, final_scale, initial_frac_bounds, transition_frac_bounds, sigma):
-    num_features = 1
-    sequences = np.empty((n, length, num_features))
-
-    initial_fracs = np.random.uniform(low=initial_frac_bounds[0], high=initial_frac_bounds[1], size=n)
-    transition_fracs = np.random.uniform(low=transition_frac_bounds[0], high=transition_frac_bounds[1], size=n)
-
-    for i, initial_frac, transition_frac in zip(range(n), initial_fracs, transition_fracs):
-        # [sequence_length, num_features]
-        ts = generate_non_stationary_time_series(
-            length=length,
-            initial_scale=initial_scale,
-            final_scale=final_scale,
-            initial_frac=initial_frac,
-            transition_frac=transition_frac,
-            sigma=sigma,
-            type=DATA_TYPE
-        )
-        sample = np.asarray([ts]).swapaxes(0, 1)
-        sequences[i] = sample
-
-    return sequences
-
-
-# @click.command()
-# @click.argument('length', type=int)
-# @click.argument('initial_scale', type=float)
-# @click.argument('final_scale', type=float)
-# @click.option('--seed', type=int, default=None, help="Random seed for reproducibility (optional).")
-def main():
-    """ Generates a non-stationary time series with varying scale.
+    Returns:
+        tuple[TensorDataset, TensorDataset]: train and test dataset
     """
+    # Split sequences into train and test split
+    train, test = train_test_split(sequences, test_size=0.2)
+    return TensorDataset(torch.Tensor(train)), TensorDataset(torch.Tensor(test))
+
+
+def main():
     logger = logging.getLogger(__name__)
-    logger.info('Generating data')
 
-    if RANDOM_STATE is not None:
-        np.random.seed(RANDOM_STATE)
+    logger.info('Preparing dataset')
 
-    data = generate_data(
-        n=N_TIME_SERIES,
-        length=TIME_SERIES_LENGTH,
-        initial_scale=INITIAL_SCALE,
-        final_scale=FINAL_SCALE,
-        initial_frac_bounds=INITIAL_FRAC_BOUNDS,
-        transition_frac_bounds=TRANSITION_FRAC_BOUNDS,
-        sigma=SIGMA
-    )
+    with open(INTERIM_DATA_PATH, 'rb') as f:
+        sequences = np.load(f)
 
-    logger.info('Saving data')
+    train_set, test_set = make_datasets(sequences)
 
-    with open(RAW_DATA_PATH, 'wb') as f:
-        np.save(f, data)
+    logger.info('Saving dataset')
+
+    torch.save(train_set, TRAIN_DATA_PATH)
+    torch.save(test_set, TEST_DATA_PATH)
 
 
 if __name__ == '__main__':
