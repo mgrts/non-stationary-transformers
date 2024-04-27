@@ -89,3 +89,9 @@ target/
 .mypy_cache/
 
 /notebooks/
+
+*.pickle
+*.pkl
+*.parquet
+/mlruns/
+/models/

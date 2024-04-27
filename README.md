@@ -58,6 +58,8 @@ Project Organization
 
 ## Reference
 https://github.com/hermanmichaels/transformer_example
+https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.levy_stable.html
+https://www.cs.toronto.edu/~duvenaud/cookbook
 
 ## Set up project
 
@@ -70,6 +72,7 @@ pre-commit run --all-files
 ## Training pipeline
 
 1. src/data/generate_data.py
-2. src/data/make_dataset.py
-3. src/models/train_model.py
-4. src/models/predict_model.py
+2. src/data/process_data.py
+3. src/data/make_dataset.py
+4. src/models/train_model.py
+5. src/models/predict_model.py

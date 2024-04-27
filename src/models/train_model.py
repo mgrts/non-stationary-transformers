@@ -1,13 +1,18 @@
 import logging
 
+import mlflow
 import numpy as np
 import torch
 from model import TransformerWithPE
 from torch.utils.data import DataLoader
 
-from src.config import (BS, FEATURE_DIM, LR, NUM_EPOCHS, NUM_FEATURES,
-                        NUM_HEADS, NUM_LAYERS, NUM_VIS_EXAMPLES,
-                        TEST_DATA_PATH, TRAIN_DATA_PATH)
+from src.config import (BS, DATA_TYPE, FEATURE_DIM, FINAL_ALPHA, INITIAL_ALPHA,
+                        INITIAL_FRAC_BOUNDS, KERNEL_SIZE, LOSS_TYPE, LR,
+                        N_TIME_SERIES, NUM_EPOCHS, NUM_FEATURES, NUM_HEADS,
+                        NUM_LAYERS, NUM_VIS_EXAMPLES, RANDOM_STATE,
+                        SEQUENCE_LENGTH, SMOOTHING_TYPE, STABILITY_PERIOD,
+                        TEST_DATA_PATH, TRACKING_URI, TRAIN_DATA_PATH,
+                        TRANSITION_FRAC_BOUNDS)
 from src.visualization.visualize import visualize_prediction
 
 
@@ -63,7 +68,7 @@ def split_sequence(
     return src, tgt, tgt_y
 
 
-def main() -> None:
+def main(experiment_name):
     logger = logging.getLogger(__name__)
 
     logger.info('Training model')
@@ -74,66 +79,109 @@ def main() -> None:
     train_loader = DataLoader(train_set, batch_size=BS, shuffle=True)
     test_loader = DataLoader(test_set, batch_size=BS, shuffle=False)
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    mlflow.set_tracking_uri(TRACKING_URI)
+    mlflow.set_experiment(experiment_name)
+    experiment = mlflow.get_experiment_by_name(experiment_name)
+    with mlflow.start_run(experiment_id=experiment.experiment_id) as run:
+        run_id = run.info.run_id
+        # artifacts_dir = os.path.join(TRACKING_URI, run_id)
 
-    # Initialize model, optimizer and loss criterion
-    model = TransformerWithPE(
-        NUM_FEATURES, NUM_FEATURES, FEATURE_DIM, NUM_HEADS, NUM_LAYERS
-    ).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
-    criterion = torch.nn.MSELoss()
+        logger.info(f'MLflow Run ID: {run_id}')
 
-    # Train loop
-    for epoch in range(NUM_EPOCHS):
-        epoch_loss = 0.0
-        for batch in train_loader:
-            optimizer.zero_grad()
+        # Log parameters
+        mlflow.log_params({
+            'learning_rate': LR,
+            'batch_size': BS,
+            'num_epochs': NUM_EPOCHS,
+            'loss_type': LOSS_TYPE,
+            'random_state': RANDOM_STATE,
+            'initial_frac_bounds': INITIAL_FRAC_BOUNDS,
+            'transition_frac_bounds': TRANSITION_FRAC_BOUNDS,
+            'data_type': DATA_TYPE,
+            'smoothing_type': SMOOTHING_TYPE,
+            'kernel_size': KERNEL_SIZE,
+            'sequence_length': SEQUENCE_LENGTH,
+            'n_time_series': N_TIME_SERIES,
+            'stability_period': STABILITY_PERIOD,
+            'initial_alpha': INITIAL_ALPHA,
+            'final_alpha': FINAL_ALPHA,
+        })
 
-            src, tgt, tgt_y = split_sequence(batch[0])
-            src, tgt, tgt_y = move_to_device(device, src, tgt, tgt_y)
-            # [bs, tgt_seq_len, num_features]
-            pred = model(src, tgt)
-            loss = criterion(pred, tgt_y)
-            epoch_loss += loss.item()
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-            loss.backward()
-            optimizer.step()
+        # Initialize model, optimizer and loss criterion
+        model = TransformerWithPE(
+            NUM_FEATURES, NUM_FEATURES, FEATURE_DIM, NUM_HEADS, NUM_LAYERS
+        ).to(device)
+        optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
-        print(
-            f'Epoch [{epoch + 1}/{NUM_EPOCHS}], Loss: '
-            f'{(epoch_loss / len(train_loader)):.4f}'
-        )
+        if LOSS_TYPE == 'MSE':
+            criterion = torch.nn.MSELoss()
+        elif LOSS_TYPE == 'L1':
+            criterion = torch.nn.L1Loss()
+        else:
+            raise AttributeError(f'Loss type {LOSS_TYPE} is not supported.')
 
-    # Evaluate model
-    model.eval()
-    eval_loss = 0.0
-    infer_loss = 0.0
-    with torch.no_grad():
-        for idx, batch in enumerate(test_loader):
-            src, tgt, tgt_y = split_sequence(batch[0])
-            src, tgt, tgt_y = move_to_device(device, src, tgt, tgt_y)
+        # Train loop
+        for epoch in range(NUM_EPOCHS):
+            epoch_loss = 0.0
+            for batch in train_loader:
+                optimizer.zero_grad()
 
-            # [bs, tgt_seq_len, num_features]
-            pred = model(src, tgt)
-            loss = criterion(pred, tgt_y)
-            eval_loss += loss.item()
+                src, tgt, tgt_y = split_sequence(batch[0])
+                src, tgt, tgt_y = move_to_device(device, src, tgt, tgt_y)
+                # [bs, tgt_seq_len, num_features]
+                pred = model(src, tgt)
+                loss = criterion(pred, tgt_y)
+                epoch_loss += loss.item()
 
-            # Run inference with model
-            pred_infer = model.infer(src, tgt.shape[1])
-            loss_infer = criterion(pred_infer, tgt_y)
-            infer_loss += loss_infer.item()
+                loss.backward()
+                optimizer.step()
 
-            if idx < NUM_VIS_EXAMPLES:
-                visualize_prediction(src, tgt, pred, pred_infer)
+            avg_epoch_loss = epoch_loss / len(train_loader)
+            logger.info(f'Epoch [{epoch + 1}/{NUM_EPOCHS}], Loss: {avg_epoch_loss:.4f}')
+            mlflow.log_metric('loss', avg_epoch_loss, step=epoch)
 
-    avg_eval_loss = eval_loss / len(test_loader)
-    avg_infer_loss = infer_loss / len(test_loader)
+        # Evaluate model
+        model.eval()
+        eval_loss = 0.0
+        infer_loss = 0.0
+        with torch.no_grad():
+            for idx, batch in enumerate(test_loader):
+                src, tgt, tgt_y = split_sequence(batch[0])
+                src, tgt, tgt_y = move_to_device(device, src, tgt, tgt_y)
 
-    print(f'Eval / Infer Loss on test set: {avg_eval_loss:.4f} / {avg_infer_loss:.4f}')
+                # [bs, tgt_seq_len, num_features]
+                pred = model(src, tgt)
+                loss = criterion(pred, tgt_y)
+                eval_loss += loss.item()
+
+                # Run inference with model
+                pred_infer = model.infer(src, tgt.shape[1])
+                loss_infer = criterion(pred_infer, tgt_y)
+                infer_loss += loss_infer.item()
+
+                if idx < NUM_VIS_EXAMPLES:
+                    figure = visualize_prediction(src, tgt, pred, pred_infer)
+                    mlflow.log_figure(figure, f'prediction_{idx}.png')
+
+        avg_eval_loss = eval_loss / len(test_loader)
+        avg_infer_loss = infer_loss / len(test_loader)
+
+        logger.info(f'Evaluation Loss on test set: {avg_eval_loss:.4f}')
+        mlflow.log_metric('eval_loss', avg_eval_loss)
+
+        logger.info(f'Evaluation inference Loss on test set: {avg_infer_loss:.4f}')
+        mlflow.log_metric('infer_loss', avg_infer_loss)
+
+        # Log the model
+        mlflow.pytorch.log_model(model, 'model')
 
 
 if __name__ == '__main__':
     log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     logging.basicConfig(level=logging.INFO, format=log_fmt)
 
-    main()
+    experiment_name = 'initial experiments'
+
+    main(experiment_name)

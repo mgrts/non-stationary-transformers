@@ -7,6 +7,7 @@ click
 coverage
 flake8
 matplotlib
+mlflow
 numpy
 
 pre-commit
