@@ -3,17 +3,32 @@ import logging
 import mlflow
 import numpy as np
 import torch
+import torch.nn as nn
 from model import TransformerWithPE
 from torch.utils.data import DataLoader
 
-from src.config import (BS, DATA_TYPE, FEATURE_DIM, FINAL_ALPHA, INITIAL_ALPHA,
-                        INITIAL_FRAC_BOUNDS, KERNEL_SIZE, LOSS_TYPE, LR,
-                        N_TIME_SERIES, NUM_EPOCHS, NUM_FEATURES, NUM_HEADS,
-                        NUM_LAYERS, NUM_VIS_EXAMPLES, RANDOM_STATE,
-                        SEQUENCE_LENGTH, SMOOTHING_TYPE, STABILITY_PERIOD,
-                        TEST_DATA_PATH, TRACKING_URI, TRAIN_DATA_PATH,
-                        TRANSITION_FRAC_BOUNDS)
+from src.config import (BS, CAUCHY_LOSS_GAMMA, DATA_TYPE, FEATURE_DIM,
+                        FINAL_ALPHA, INITIAL_ALPHA, INITIAL_FRAC_BOUNDS,
+                        KERNEL_SIZE, LOSS_TYPE, LR, N_TIME_SERIES, NUM_EPOCHS,
+                        NUM_FEATURES, NUM_HEADS, NUM_LAYERS, NUM_VIS_EXAMPLES,
+                        RANDOM_STATE, SEQUENCE_LENGTH, SMOOTHING_TYPE,
+                        STABILITY_PERIOD, TEST_DATA_PATH, TRACKING_URI,
+                        TRAIN_DATA_PATH, TRANSITION_FRAC_BOUNDS)
 from src.visualization.visualize import visualize_prediction
+
+
+def mape_loss(output, target):
+    """
+    Calculate the Mean Absolute Percentage Error between output and target
+    """
+    return torch.mean(torch.abs((target - output) / target)) * 100
+
+
+def smape_loss(output, target):
+    """
+    Calculate the Symmetric Mean Absolute Percentage Error between output and target
+    """
+    return torch.mean(2 * torch.abs(target - output) / (torch.abs(target) + torch.abs(output))) * 100
 
 
 def move_to_device(device: torch.device, *tensors: torch.Tensor) -> list[torch.Tensor]:
@@ -68,6 +83,23 @@ def split_sequence(
     return src, tgt, tgt_y
 
 
+class CauchyLoss(nn.Module):
+    def __init__(self, gamma=1.0, reduction='mean'):
+        super(CauchyLoss, self).__init__()
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, input, target):
+        diffs = input - target
+        cauchy_losses = self.gamma * torch.log(1 + (diffs ** 2) / self.gamma)
+        if self.reduction == 'sum':
+            return cauchy_losses.sum()
+        elif self.reduction == 'mean':
+            return cauchy_losses.mean()
+        else:
+            return cauchy_losses
+
+
 def main(experiment_name):
     logger = logging.getLogger(__name__)
 
@@ -119,12 +151,17 @@ def main(experiment_name):
             criterion = torch.nn.MSELoss()
         elif LOSS_TYPE == 'L1':
             criterion = torch.nn.L1Loss()
+        elif LOSS_TYPE == 'Cauchy':
+            criterion = CauchyLoss(gamma=CAUCHY_LOSS_GAMMA)
+            mlflow.log_param('cauchy_loss_gamma', CAUCHY_LOSS_GAMMA)
         else:
             raise AttributeError(f'Loss type {LOSS_TYPE} is not supported.')
 
         # Train loop
         for epoch in range(NUM_EPOCHS):
             epoch_loss = 0.0
+            epoch_mape = 0.0
+            epoch_smape = 0.0
             for batch in train_loader:
                 optimizer.zero_grad()
 
@@ -135,17 +172,34 @@ def main(experiment_name):
                 loss = criterion(pred, tgt_y)
                 epoch_loss += loss.item()
 
+                mape = mape_loss(pred, tgt_y)
+                smape = smape_loss(pred, tgt_y)
+                epoch_mape += mape.item()
+                epoch_smape += smape.item()
+
                 loss.backward()
                 optimizer.step()
 
             avg_epoch_loss = epoch_loss / len(train_loader)
+            avg_epoch_mape = epoch_mape / len(train_loader)
+            avg_epoch_smape = epoch_smape / len(train_loader)
+
             logger.info(f'Epoch [{epoch + 1}/{NUM_EPOCHS}], Loss: {avg_epoch_loss:.4f}')
+            logger.info(f'MAPE: {avg_epoch_mape: .2f}, SMAPE: {avg_epoch_smape: .2f}')
+
             mlflow.log_metric('loss', avg_epoch_loss, step=epoch)
+            mlflow.log_metric('mape', avg_epoch_mape, step=epoch)
+            mlflow.log_metric('smape', avg_epoch_smape, step=epoch)
 
         # Evaluate model
         model.eval()
         eval_loss = 0.0
+        eval_mape = 0.0
+        eval_smape = 0.0
         infer_loss = 0.0
+        infer_mape = 0.0
+        infer_smape = 0.0
+
         with torch.no_grad():
             for idx, batch in enumerate(test_loader):
                 src, tgt, tgt_y = split_sequence(batch[0])
@@ -155,24 +209,40 @@ def main(experiment_name):
                 pred = model(src, tgt)
                 loss = criterion(pred, tgt_y)
                 eval_loss += loss.item()
+                eval_mape += mape_loss(pred, tgt_y).item()
+                eval_smape += smape_loss(pred, tgt_y).item()
 
                 # Run inference with model
                 pred_infer = model.infer(src, tgt.shape[1])
                 loss_infer = criterion(pred_infer, tgt_y)
                 infer_loss += loss_infer.item()
+                infer_mape += mape_loss(pred_infer, tgt_y).item()
+                infer_smape += smape_loss(pred_infer, tgt_y).item()
 
                 if idx < NUM_VIS_EXAMPLES:
                     figure = visualize_prediction(src, tgt, pred, pred_infer)
                     mlflow.log_figure(figure, f'prediction_{idx}.png')
 
         avg_eval_loss = eval_loss / len(test_loader)
+        avg_eval_mape = eval_mape / len(test_loader)
+        avg_eval_smape = eval_smape / len(test_loader)
         avg_infer_loss = infer_loss / len(test_loader)
+        avg_infer_mape = infer_mape / len(test_loader)
+        avg_infer_smape = infer_smape / len(test_loader)
 
-        logger.info(f'Evaluation Loss on test set: {avg_eval_loss:.4f}')
-        mlflow.log_metric('eval_loss', avg_eval_loss)
+        logger.info(
+            f'Evaluation Metrics - Loss: {avg_eval_loss:.4f}, MAPE: {avg_eval_mape:.2f}, SMAPE: {avg_eval_smape:.2f}')
+        logger.info(
+            f'Inference Metrics - Loss: {avg_infer_loss:.4f}, MAPE: {avg_infer_mape:.2f}, SMAPE: {avg_infer_smape:.2f}')
 
-        logger.info(f'Evaluation inference Loss on test set: {avg_infer_loss:.4f}')
-        mlflow.log_metric('infer_loss', avg_infer_loss)
+        mlflow.log_metrics({
+            'eval_loss': avg_eval_loss,
+            'eval_mape': avg_eval_mape,
+            'eval_smape': avg_eval_smape,
+            'infer_loss': avg_infer_loss,
+            'infer_mape': avg_infer_mape,
+            'infer_smape': avg_infer_smape
+        })
 
         # Log the model
         mlflow.pytorch.log_model(model, 'model')
