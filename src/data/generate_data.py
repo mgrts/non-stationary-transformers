@@ -1,13 +1,17 @@
 import logging
 
+import click
 import numpy as np
-# import click
 from scipy.stats import levy_stable
 
 from src.config import (DATA_TYPE, FINAL_ALPHA, INITIAL_ALPHA,
-                        INITIAL_FRAC_BOUNDS, N_TIME_SERIES, NUM_FEATURES,
+                        INITIAL_FRAC_BOUNDS_LONG, INITIAL_FRAC_BOUNDS_MODERATE,
+                        INITIAL_FRAC_BOUNDS_SHORT, N_TIME_SERIES, NUM_FEATURES,
                         RANDOM_STATE, RAW_DATA_PATH, SEQUENCE_LENGTH,
-                        SINE_INTERVAL, TRANSITION_FRAC_BOUNDS)
+                        SINE_INTERVAL, STABILITY_PERIOD,
+                        TRANSITION_FRAC_BOUNDS_LONG,
+                        TRANSITION_FRAC_BOUNDS_MODERATE,
+                        TRANSITION_FRAC_BOUNDS_SHORT)
 
 
 def generate_non_stationary_sequence(length, initial_alpha, final_alpha, initial_frac, transition_frac, type):
@@ -53,12 +57,13 @@ def generate_data(n, length, initial_alpha, final_alpha, initial_frac_bounds, tr
     return sequences
 
 
-# @click.command()
-# @click.argument('length', type=int)
-# @click.argument('initial_scale', type=float)
-# @click.argument('final_scale', type=float)
-# @click.option('--seed', type=int, default=None, help="Random seed for reproducibility (optional).")
-def main():
+@click.command()
+@click.option('--stability-period', default=STABILITY_PERIOD,
+              type=click.Choice(['short', 'moderate', 'long'], case_sensitive=False),
+              help='Period of stability (short, moderate, long)')
+@click.option('--initial-alpha', default=INITIAL_ALPHA, type=float, help='Initial alpha value for generating sequences')
+@click.option('--final-alpha', default=FINAL_ALPHA, type=float, help='Final alpha value for generating sequences')
+def main(stability_period, initial_alpha, final_alpha):
     """ Generates a non-stationary sequence with varying stability.
     """
     logger = logging.getLogger(__name__)
@@ -68,13 +73,25 @@ def main():
     if RANDOM_STATE is not None:
         np.random.seed(RANDOM_STATE)
 
+    if stability_period == 'short':
+        initial_frac_bounds = INITIAL_FRAC_BOUNDS_SHORT
+        transition_frac_bounds = TRANSITION_FRAC_BOUNDS_SHORT
+    elif stability_period == 'moderate':
+        initial_frac_bounds = INITIAL_FRAC_BOUNDS_MODERATE
+        transition_frac_bounds = TRANSITION_FRAC_BOUNDS_MODERATE
+    elif stability_period == 'long':
+        initial_frac_bounds = INITIAL_FRAC_BOUNDS_LONG
+        transition_frac_bounds = TRANSITION_FRAC_BOUNDS_LONG
+    else:
+        raise AttributeError(f'Stability period {stability_period} is not supported')
+
     data = generate_data(
         n=N_TIME_SERIES,
         length=SEQUENCE_LENGTH,
-        initial_alpha=INITIAL_ALPHA,
-        final_alpha=FINAL_ALPHA,
-        initial_frac_bounds=INITIAL_FRAC_BOUNDS,
-        transition_frac_bounds=TRANSITION_FRAC_BOUNDS
+        initial_alpha=initial_alpha,
+        final_alpha=final_alpha,
+        initial_frac_bounds=initial_frac_bounds,
+        transition_frac_bounds=transition_frac_bounds
     )
 
     logger.info('Saving data')
