@@ -1,6 +1,7 @@
 import math
 
 import torch
+from torch import nn
 
 
 # Taken from https://pytorch.org/tutorials/beginner/transformer_tutorial.html,
@@ -119,3 +120,33 @@ class TransformerWithPE(torch.nn.Module):
             output[:, i + 1] = self.forward(src, output)[:, i]
 
         return output[:, 1:]
+
+
+class LSTM(nn.Module):
+    def __init__(self, input_dim, hidden_dim, num_layers, output_dim):
+        super(LSTM, self).__init__()
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
+        self.fc = nn.Linear(hidden_dim, output_dim)
+
+    def forward(self, x, output_sequence_length=60):
+        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_dim).to(x.device)
+        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_dim).to(x.device)
+        out, _ = self.lstm(x, (h0, c0))
+        out = self.fc(out)
+
+        # Ensure the output length is fixed to output_sequence_length
+        if out.size(1) > output_sequence_length:
+            out = out[:, -output_sequence_length:, :]
+
+        return out
+
+    def infer(self, src, sequence_length):
+        outputs = []
+        with torch.no_grad():
+            for _ in range(sequence_length):
+                out = self.forward(src, output_sequence_length=1)
+                outputs.append(out[:, -1, :].unsqueeze(-1))
+                src = torch.cat([src[:, 1:, :], out[:, -1:, :]], dim=1)
+        return torch.cat(outputs, dim=1)

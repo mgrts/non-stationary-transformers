@@ -2,13 +2,17 @@ import logging
 
 import click
 import numpy as np
+import requests
 from scipy.stats import levy_stable
+from tqdm import tqdm
 
-from src.config import (DATA_TYPE, FINAL_ALPHA, INITIAL_ALPHA,
-                        INITIAL_FRAC_BOUNDS_LONG, INITIAL_FRAC_BOUNDS_MODERATE,
+from src.config import (COVID_SEQ_CHUNK_SIZE, DATA_TYPE, FINAL_ALPHA,
+                        INITIAL_ALPHA, INITIAL_FRAC_BOUNDS_LONG,
+                        INITIAL_FRAC_BOUNDS_MODERATE,
                         INITIAL_FRAC_BOUNDS_SHORT, N_TIME_SERIES, NUM_FEATURES,
-                        RANDOM_STATE, RAW_DATA_PATH, SEQUENCE_LENGTH,
-                        SINE_INTERVAL, STABILITY_PERIOD,
+                        OWID_DATA_URL, OWID_RAW_DATA_PATH, RANDOM_STATE,
+                        RAW_DATA_PATH, SEQUENCE_LENGTH, SINE_INTERVAL,
+                        STABILITY_PERIOD, SYNTHETIC_COVID_RAW_DATA_PATH,
                         TRANSITION_FRAC_BOUNDS_LONG,
                         TRANSITION_FRAC_BOUNDS_MODERATE,
                         TRANSITION_FRAC_BOUNDS_SHORT)
@@ -57,6 +61,22 @@ def generate_data(n, length, initial_alpha, final_alpha, initial_frac_bounds, tr
     return sequences
 
 
+def download_with_progress(url, path, chunk_size=1024):
+    # Streaming download
+    response = requests.get(url, stream=True)
+    total_size = int(response.headers.get('content-length', 0))
+    block_size = chunk_size  # 1 Kibibyte
+    t = tqdm(total=total_size, unit='iB', unit_scale=True)
+    with open(path, 'wb') as file:
+        for data in response.iter_content(block_size):
+            t.update(len(data))
+            file.write(data)
+    t.close()
+    if total_size != 0 and t.n != total_size:
+        print("ERROR, something went wrong")
+    return path
+
+
 @click.command()
 @click.option('--stability-period', default=STABILITY_PERIOD,
               type=click.Choice(['short', 'moderate', 'long'], case_sensitive=False),
@@ -68,7 +88,7 @@ def main(stability_period, initial_alpha, final_alpha):
     """
     logger = logging.getLogger(__name__)
 
-    logger.info('Generating data')
+    logger.info('Generating data with different stability periods')
 
     if RANDOM_STATE is not None:
         np.random.seed(RANDOM_STATE)
@@ -94,10 +114,22 @@ def main(stability_period, initial_alpha, final_alpha):
         transition_frac_bounds=transition_frac_bounds
     )
 
+    logger.info('Generating positive time series for COVID predictions')
+
+    synthetic_data = levy_stable.rvs(alpha=1.5, beta=0, loc=0, scale=1, size=(N_TIME_SERIES, COVID_SEQ_CHUNK_SIZE))
+    synthetic_data = np.clip(a=synthetic_data, a_min=0, a_max=None)
+
+    logger.info('Downloading real COVID data')
+
+    download_with_progress(OWID_DATA_URL, OWID_RAW_DATA_PATH)
+
     logger.info('Saving data')
 
     with open(RAW_DATA_PATH, 'wb') as f:
         np.save(f, data)
+
+    with open(SYNTHETIC_COVID_RAW_DATA_PATH, 'wb') as f:
+        np.save(f, synthetic_data)
 
 
 if __name__ == '__main__':
