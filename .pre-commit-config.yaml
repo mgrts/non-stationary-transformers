@@ -16,18 +16,27 @@ repos:
       - id: requirements-txt-fixer
       - id: end-of-file-fixer
 
+  - repo: https://github.com/psf/black
+    rev: 24.4.2
+    hooks:
+      - id: black
+        args: [ --line-length=99 ]
+        exclude: ADHOCS
+
   - repo: https://github.com/PyCQA/isort
     rev: 5.12.0
     hooks:
       - id: isort
+        args: [ --profile, black, --line-length, "99" ]
         exclude: ADHOCS
 
   - repo: https://github.com/PyCQA/flake8
     rev: 4.0.1
     hooks:
       - id: flake8
-        exclude: ADHOCS
-        args: [ --max-line-length=131 ]
+        # .claude/ holds vendored Claude Code tooling (hooks); not project source.
+        exclude: ^\.claude/
+        args: [ --max-line-length=99, --extend-ignore=E203 ]
 
   - repo: https://github.com/sqlfluff/sqlfluff
     rev: 3.0.3

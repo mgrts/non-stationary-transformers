@@ -1,0 +1,11 @@
+# Tooling configuration. Packaging metadata still lives in setup.py.
+# Canonical line length is 99, kept in sync across black, isort, flake8
+# (tox.ini), and the .claude auto-format hook.
+
+[tool.black]
+line-length = 99
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 99

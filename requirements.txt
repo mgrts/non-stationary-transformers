@@ -3,16 +3,20 @@
 awscli
 
 # external requirements
+black
 click
 coverage
 flake8
+isort
 matplotlib
 mlflow
 numpy
-
+pandas
 pre-commit
 python-dotenv>=0.5.1
+requests
 scikit-learn
 scipy
 Sphinx
 torch
+tqdm
