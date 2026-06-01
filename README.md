@@ -65,14 +65,49 @@ https://www.cs.toronto.edu/~duvenaud/cookbook
 
 ```bash
 pip install -r requirements.txt
+cp .env.example .env  # then edit values as needed (see src/config.py)
 pre-commit install
 pre-commit run --all-files
 ```
 
 ## Training pipeline
 
-1. src/data/generate_data.py
-2. src/data/process_data.py
-3. src/data/make_dataset.py
-4. src/models/train_model.py
-5. src/models/predict_model.py
+Synthetic transformer pipeline:
+
+1. `src/data/download_data.py` - download the real OWID COVID CSV once (cached, idempotent)
+2. `src/data/generate_data.py` - generate non-stationary and synthetic-COVID series
+3. `src/data/process_data.py` - smooth + **causally** normalise into interim data
+4. `src/data/make_dataset.py` - build **train/val/test** `TensorDataset`s (group-aware for OWID)
+5. `src/models/train_model.py` - train the transformer (early stopping on validation)
+6. `src/models/predict_model.py` - load a trained model from MLflow and forecast
+
+Or run the whole sweep at once with `python src/training_pipeline.py`, which
+downloads once, builds each data condition once, and trains across `SEEDS` for
+variance estimation. Afterwards, `python src/models/aggregate_results.py`
+collects the per-seed MLflow runs and prints mean +/- std of the test metrics
+per data condition.
+
+Real-world (COVID) experiment: `src/models/train_model_real.py` pre-trains on the
+synthetic data and fine-tunes on the OWID dataset (`--model-type LSTM|Transformer`).
+
+### Methodology notes
+
+- **No look-ahead leakage:** normalization statistics are fit on each sequence's
+  history window only (`causal_normalize`), never the forecast horizon.
+- **Group-aware real split:** OWID chunks are split by country, so no country
+  spans train/val/test; chunks are non-overlapping.
+- **Honest evaluation:** the primary metric is the *autoregressive* forecast
+  (model consumes its own outputs); teacher-forced numbers are reported only as
+  an optimistic reference. Validation/early-stopping also use the autoregressive
+  loss. Metrics include MSE/MAE/RMSE alongside MAPE/SMAPE.
+- **Metric scale:** all metrics are computed on the *normalized* scale (the
+  per-sequence causal scaler is not retained for inverse-transforming), so
+  MSE/MAE/RMSE are comparable across models on the same dataset but not in
+  original units. MAPE is masked to `|target| > eps` and is only a rough
+  secondary indicator on this ~0-centered data; prefer MSE/MAE/RMSE/SMAPE.
+- **Reproducibility:** `RANDOM_STATE` fixes data generation and the split;
+  `SEEDS` varies only model initialisation/training so reported variance is
+  model variance. See `src/seeding.py`.
+
+All hyperparameters are read from the environment (copy `.env.example` to `.env`).
+Shared model/training helpers live in `src/models/model.py` and `src/models/utils.py`.
