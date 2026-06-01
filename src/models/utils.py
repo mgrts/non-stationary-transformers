@@ -1,25 +1,32 @@
 import logging
 
 import mlflow
-import numpy as np
 import torch
 import torch.nn as nn
-from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
-from src.config import NUM_VIS_EXAMPLES
+from src.config import LEAVE_RATIO, NUM_VIS_EXAMPLES, PATIENCE
+from src.models.model import TransformerWithPE
 from src.visualization.visualize import visualize_prediction
 
-log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+log_fmt = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 logging.basicConfig(level=logging.INFO, format=log_fmt)
 logger = logging.getLogger(__name__)
 
 
-def split_sequence(sequence, sequence_length=300, leave_ratio=0.8):
-    split_index = int(sequence_length * leave_ratio)
+# --- Sequence splitting -------------------------------------------------------
+def split_sequence_with_decoder(sequence, leave_ratio=LEAVE_RATIO):
+    """3-way split for teacher forcing: `src`, decoder input `tgt`, target `tgt_y`.
+
+    The split point is derived from the actual sequence length (no hardcoded
+    length). `tgt` is `tgt_y` shifted right by one - it starts with the last
+    token of `src` and ends with the second-last token of `tgt_y`.
+    """
+    split_index = int(sequence.shape[1] * leave_ratio)
     src = sequence[:, :split_index, :]
+    tgt = sequence[:, split_index - 1 : -1, :]
     tgt_y = sequence[:, split_index:, :]
-    return src, tgt_y
+    return src, tgt, tgt_y
 
 
 def move_to_device(device: torch.device, *tensors: torch.Tensor) -> list[torch.Tensor]:
@@ -32,160 +39,254 @@ def move_to_device(device: torch.device, *tensors: torch.Tensor) -> list[torch.T
     return moved_tensors
 
 
-def mape_loss(output, target):
-    return torch.mean(torch.abs((target - output) / (target + 1e-10))) * 100
+def prepare_batch(sequence, device, leave_ratio=LEAVE_RATIO):
+    """3-way teacher-forcing split + device move, shared by both architectures."""
+    src, tgt, tgt_y = split_sequence_with_decoder(sequence, leave_ratio)
+    src, tgt, tgt_y = move_to_device(device, src, tgt, tgt_y)
+    return src, tgt, tgt_y
+
+
+def model_forward(model, src, tgt, tgt_y):
+    """Teacher-forced forward pass for either architecture (length = tgt_y)."""
+    if isinstance(model, TransformerWithPE):
+        return model(src, tgt)
+    return model(src, output_sequence_length=tgt_y.shape[1], tgt=tgt)
+
+
+# --- Losses & metrics ---------------------------------------------------------
+def mae_loss(output, target):
+    return torch.mean(torch.abs(output - target))
+
+
+def rmse_loss(output, target):
+    return torch.sqrt(torch.mean((output - target) ** 2))
+
+
+def mape_loss(output, target, eps=1e-2):
+    # On normalized (~0-centered) targets, dividing by values near zero makes
+    # MAPE explode, so near-zero targets are masked out. CAVEAT: the surviving
+    # subset is data-dependent, so MAPE summarizes a different set of points than
+    # the full-set MSE/MAE/RMSE/SMAPE and is not directly comparable to them.
+    # It is reported only as a rough secondary indicator - prefer MSE/MAE/RMSE
+    # (and SMAPE) on this normalized data. NaN if every target is masked.
+    mask = target.abs() > eps
+    if mask.sum() == 0:
+        return torch.tensor(float("nan"), device=target.device)
+    return torch.mean(torch.abs((target[mask] - output[mask]) / target[mask])) * 100
 
 
 def smape_loss(output, target):
-    return torch.mean(2 * torch.abs(target - output) / (torch.abs(target) + torch.abs(output))) * 100
+    return (
+        torch.mean(
+            2 * torch.abs(target - output) / (torch.abs(target) + torch.abs(output) + 1e-10)
+        )
+        * 100
+    )
 
 
 class CauchyLoss(nn.Module):
-    def __init__(self, gamma=1.0, reduction='mean'):
+    def __init__(self, gamma=1.0, reduction="mean"):
         super(CauchyLoss, self).__init__()
         self.gamma = gamma
         self.reduction = reduction
 
     def forward(self, input, target):
         diffs = input - target
-        cauchy_losses = self.gamma * torch.log(1 + (diffs ** 2) / self.gamma)
-        if self.reduction == 'sum':
+        cauchy_losses = self.gamma * torch.log(1 + (diffs**2) / self.gamma)
+        if self.reduction == "sum":
             return cauchy_losses.sum()
-        elif self.reduction == 'mean':
+        elif self.reduction == "mean":
             return cauchy_losses.mean()
         else:
             return cauchy_losses
 
 
-def pad_or_truncate(sequence, target_length):
-    if len(sequence) > target_length:
-        return sequence[:target_length]
-    elif len(sequence) < target_length:
-        return np.pad(sequence, ((0, target_length - len(sequence)), (0, 0)), mode='constant')
-    return sequence
+def make_criterion(loss_type, cauchy_gamma=1.0):
+    """Single source of truth for the training criterion, shared by both trainers."""
+    if loss_type == "MSE":
+        return nn.MSELoss()
+    elif loss_type == "L1":
+        return nn.L1Loss()
+    elif loss_type == "Cauchy":
+        return CauchyLoss(gamma=cauchy_gamma)
+    raise ValueError(f"Loss type {loss_type} is not supported.")
 
 
-def normalize_time_series(data: np.ndarray) -> np.ndarray:
-    if data.ndim == 2:
-        num_samples, seq_len = data.shape
-        normalized_data = np.zeros_like(data)
-        for i in range(num_samples):
-            scaler = StandardScaler()
-            normalized_data[i, :] = scaler.fit_transform(data[i, :].reshape(-1, 1)).flatten()
-    elif data.ndim == 3:
-        num_samples, seq_len, num_features = data.shape
-        normalized_data = np.zeros_like(data)
-        for i in range(num_samples):
-            scaler = StandardScaler()
-            normalized_data[i, :, :] = scaler.fit_transform(data[i, :, :])
-    else:
-        raise ValueError("Data must be either 2 or 3 dimensions")
+def error_metrics(pred, target):
+    """Forecast error metrics, computed on whatever scale `pred`/`target` are in.
 
-    return normalized_data
-
-
-def normalize_data(data: np.ndarray, sequence_length: int = 300) -> np.ndarray:
-    data = normalize_time_series(data)
-    if data.ndim == 2:
-        data = np.array([pad_or_truncate(seq, sequence_length) for seq in data])
-    elif data.ndim == 3:
-        data = np.array([pad_or_truncate(seq, sequence_length) for seq in data])
-
-    if data.ndim == 2:
-        data = data[..., np.newaxis]
-    return data
+    In this project that is the causally-normalized (and log1p-for-counts) scale
+    used during training - the fitted per-sequence scalers are not retained, so
+    these are NORMALIZED-scale errors, not original units. MSE/MAE/RMSE are
+    therefore scale-dependent (comparable across models on the same data, not
+    across differently-scaled datasets); MAPE/SMAPE are scale-free but weak on
+    ~0-centered data (see mape_loss).
+    """
+    return {
+        "mse": torch.mean((pred - target) ** 2).item(),
+        "mae": mae_loss(pred, target).item(),
+        "rmse": rmse_loss(pred, target).item(),
+        "mape": mape_loss(pred, target).item(),
+        "smape": smape_loss(pred, target).item(),
+    }
 
 
-def train_model(model, optimizer, criterion, loader, split_name, num_epoch, device):
-    n_batches = len(loader)
+# --- Training & evaluation ----------------------------------------------------
+def _validate(model, criterion, loader, device):
+    """Average AUTOREGRESSIVE validation loss - the honest forecasting objective
+    used for early stopping and model selection (not the optimistic
+    teacher-forced loss)."""
+    model.eval()
+    total = 0.0
+    n = 0
+    with torch.no_grad():
+        for batch in loader:
+            src, _, tgt_y = prepare_batch(batch[0], device)
+            pred = model.infer(src, tgt_y.shape[1])
+            total += criterion(pred, tgt_y).item()
+            n += 1
+    return total / max(n, 1)
 
-    model.train()
+
+def train_model(
+    model,
+    optimizer,
+    criterion,
+    train_loader,
+    split_name,
+    num_epoch,
+    device,
+    val_loader=None,
+    patience=PATIENCE,
+):
+    """Train with optional validation-based early stopping.
+
+    When `val_loader` is given, the model is selected by the best autoregressive
+    validation loss and restored to that checkpoint at the end; training stops
+    early after `patience` epochs without improvement.
+    """
+    n_batches = len(train_loader)
+    best_val = float("inf")
+    best_state = None
+    epochs_no_improve = 0
+
     for epoch in range(num_epoch):
+        model.train()
         epoch_loss = 0.0
-        epoch_mape = 0.0
-        epoch_smape = 0.0
-        with tqdm(total=n_batches, desc=f"Epoch {epoch + 1}/{num_epoch} for {split_name}",
-                  unit='batch') as pbar:
-            for batch in loader:
+        with tqdm(
+            total=n_batches, desc=f"Epoch {epoch + 1}/{num_epoch} for {split_name}", unit="batch"
+        ) as pbar:
+            for batch in train_loader:
                 optimizer.zero_grad()
-                src, tgt_y = split_sequence(batch[0])
-                src, tgt_y = move_to_device(device, src, tgt_y)
-                pred = model(src)
+                src, tgt, tgt_y = prepare_batch(batch[0], device)
+                pred = model_forward(model, src, tgt, tgt_y)
                 loss = criterion(pred, tgt_y)
                 epoch_loss += loss.item()
-                mape = mape_loss(pred, tgt_y)
-                smape = smape_loss(pred, tgt_y)
-                epoch_mape += mape.item()
-                epoch_smape += smape.item()
                 loss.backward()
                 optimizer.step()
                 pbar.update(1)
 
         avg_epoch_loss = epoch_loss / n_batches
-        avg_epoch_mape = epoch_mape / n_batches
-        avg_epoch_smape = epoch_smape / n_batches
-        logger.info(f'Epoch [{epoch + 1}/{num_epoch}], Loss: {avg_epoch_loss:.4f}')
-        logger.info(f'MAPE: {avg_epoch_mape:.2f}, SMAPE: {avg_epoch_smape:.2f}')
-        mlflow.log_metric(f'loss_{split_name}', avg_epoch_loss, step=epoch)
-        mlflow.log_metric(f'mape_{split_name}', avg_epoch_mape, step=epoch)
-        mlflow.log_metric(f'smape_{split_name}', avg_epoch_smape, step=epoch)
+        mlflow.log_metric(f"train_loss_{split_name}", avg_epoch_loss, step=epoch)
+
+        if val_loader is not None:
+            val_loss = _validate(model, criterion, val_loader, device)
+            mlflow.log_metric(f"val_loss_{split_name}", val_loss, step=epoch)
+            logger.info(
+                f"[{split_name}] Epoch {epoch + 1}/{num_epoch} - "
+                f"train_loss: {avg_epoch_loss:.4f}, val_loss (autoregressive): {val_loss:.4f}"
+            )
+
+            if val_loss < best_val - 1e-6:
+                best_val = val_loss
+                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
+                if epochs_no_improve >= patience:
+                    logger.info(
+                        f"[{split_name}] Early stopping at epoch {epoch + 1} "
+                        f"(no val improvement for {patience} epochs)."
+                    )
+                    break
+        else:
+            logger.info(
+                f"[{split_name}] Epoch {epoch + 1}/{num_epoch} - train_loss: {avg_epoch_loss:.4f}"
+            )
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+        mlflow.log_metric(f"best_val_loss_{split_name}", best_val)
+        logger.info(f"[{split_name}] Restored best checkpoint (val_loss={best_val:.4f}).")
+
+    return best_val if best_state is not None else avg_epoch_loss
 
 
-def evaluate_model(model, criterion, loader, split_name, device):
+def evaluate_model(model, criterion, loader, split_name, device, vis_prefix=None):
+    """Evaluate on a held-out set, reporting BOTH protocols.
+
+    The AUTOREGRESSIVE ("infer") metrics are the primary result - they reflect
+    true multi-step forecasting where the model consumes its own predictions.
+    The teacher-forced ("tf") metrics are reported alongside as an optimistic
+    upper bound (the model sees ground-truth decoder inputs) and should not be
+    quoted as the forecasting performance.
+    """
     n_batches = len(loader)
-
     model.eval()
-    eval_loss = 0.0
-    eval_mape = 0.0
-    eval_smape = 0.0
-    infer_loss = 0.0
-    infer_mape = 0.0
-    infer_smape = 0.0
+
+    # Accumulate sample-WEIGHTED metric sums (weight = batch size) so the final
+    # average is a true per-sample mean, not a per-batch mean that over-weights a
+    # smaller trailing batch. RMSE is derived from the aggregated MSE at the end
+    # (sqrt of a weighted MSE mean; averaging per-batch RMSEs would be wrong).
+    tf_sums = {"mse": 0.0, "mae": 0.0, "mape": 0.0, "smape": 0.0}
+    ar_sums = {"mse": 0.0, "mae": 0.0, "mape": 0.0, "smape": 0.0}
+    total = 0
 
     with torch.no_grad():
-        with tqdm(total=n_batches, desc=f"Evaluating {split_name} dataset", unit='sample') as pbar:
+        with tqdm(total=n_batches, desc=f"Evaluating {split_name} dataset", unit="batch") as pbar:
             for idx, batch in enumerate(loader):
-                src, tgt_y = split_sequence(batch[0])
-                src, tgt_y = move_to_device(device, src, tgt_y)
+                src, tgt, tgt_y = prepare_batch(batch[0], device)
+                bs = tgt_y.shape[0]
+                total += bs
 
-                pred = model(src)
-                loss = criterion(pred, tgt_y)
-                eval_loss += loss.item()
-                eval_mape += mape_loss(pred, tgt_y).item()
-                eval_smape += smape_loss(pred, tgt_y).item()
+                pred_tf = model_forward(model, src, tgt, tgt_y)
+                for k, v in error_metrics(pred_tf, tgt_y).items():
+                    if k in tf_sums:
+                        tf_sums[k] += v * bs
 
                 pred_infer = model.infer(src, tgt_y.shape[1])
-                loss_infer = criterion(pred_infer, tgt_y)
-                infer_loss += loss_infer.item()
-                infer_mape += mape_loss(pred_infer, tgt_y).item()
-                infer_smape += smape_loss(pred_infer, tgt_y).item()
+                for k, v in error_metrics(pred_infer, tgt_y).items():
+                    if k in ar_sums:
+                        ar_sums[k] += v * bs
 
                 if idx < NUM_VIS_EXAMPLES:
-                    figure = visualize_prediction(src, tgt_y, pred, pred_infer)
-                    mlflow.log_figure(figure, f'prediction_{split_name}_{idx}.png')
+                    figure = visualize_prediction(src, tgt_y, pred_tf, pred_infer)
+                    name = f"prediction_{vis_prefix or split_name}_{idx}.png"
+                    mlflow.log_figure(figure, name)
 
                 pbar.update(1)
 
-    avg_eval_loss = eval_loss / n_batches
-    avg_eval_mape = eval_mape / n_batches
-    avg_eval_smape = eval_smape / n_batches
-    avg_infer_loss = infer_loss / n_batches
-    avg_infer_mape = infer_mape / n_batches
-    avg_infer_smape = infer_smape / n_batches
+    denom = max(total, 1)
+    tf = {k: s / denom for k, s in tf_sums.items()}
+    ar = {k: s / denom for k, s in ar_sums.items()}
+    tf["rmse"] = tf["mse"] ** 0.5
+    ar["rmse"] = ar["mse"] ** 0.5
 
-    logging.info(
-        f'{split_name.capitalize()} Evaluation Metrics - Loss: {avg_eval_loss:.4f}'
-        f'MAPE: {avg_eval_mape:.2f}, SMAPE: {avg_eval_smape:.2f}'
+    logger.info(
+        f"{split_name.capitalize()} AUTOREGRESSIVE (primary) - "
+        f"MSE: {ar['mse']:.4f}, MAE: {ar['mae']:.4f}, RMSE: {ar['rmse']:.4f}, "
+        f"MAPE: {ar['mape']:.2f}, SMAPE: {ar['smape']:.2f}"
     )
-    logging.info(
-        f'{split_name.capitalize()} Inference Metrics - Loss: {avg_infer_loss:.4f}'
-        f'MAPE: {avg_infer_mape:.2f}, SMAPE: {avg_infer_smape:.2f}'
+    logger.info(
+        f"{split_name.capitalize()} teacher-forced (optimistic) - "
+        f"MSE: {tf['mse']:.4f}, MAE: {tf['mae']:.4f}, RMSE: {tf['rmse']:.4f}, "
+        f"MAPE: {tf['mape']:.2f}, SMAPE: {tf['smape']:.2f}"
     )
-    mlflow.log_metrics({
-        f'{split_name}_eval_loss': avg_eval_loss,
-        f'{split_name}_eval_mape': avg_eval_mape,
-        f'{split_name}_eval_smape': avg_eval_smape,
-        f'{split_name}_infer_loss': avg_infer_loss,
-        f'{split_name}_infer_mape': avg_infer_mape,
-        f'{split_name}_infer_smape': avg_infer_smape,
-    })
+
+    metrics = {}
+    for k, v in ar.items():
+        metrics[f"{split_name}_ar_{k}"] = v
+    for k, v in tf.items():
+        metrics[f"{split_name}_tf_{k}"] = v
+    mlflow.log_metrics(metrics)
+    return metrics
