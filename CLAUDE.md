@@ -7,23 +7,28 @@ Research repo, solo author, experiments tracked in **MLflow**.
 ## Tech stack & environment
 
 - **Python 3** + PyTorch, NumPy, scikit-learn, pandas, SciPy, MLflow, click, matplotlib,
-  tqdm, python-dotenv. Install: `pip install -r requirements.txt`.
-- **No `pyproject` packaging** — `setup.py` installs the `src` package (`pip install -e .`).
-  `pyproject.toml` holds ONLY tool config (black/isort @ 99).
+  tqdm, python-dotenv. **Managed by Poetry**: `poetry install` (into an in-project `.venv`).
+- **Packaging & deps in `pyproject.toml`** (Poetry, `[project]` PEP 621 metadata +
+  `poetry-core` backend). Runtime deps in `[project.dependencies]`; tooling in
+  `[tool.poetry.group.dev]`, docs in the optional `docs` group, `awscli` in the `aws`
+  extra. It installs the historical `src` package so `from src.config import ...` keeps
+  working. `poetry.lock` is committed. No `setup.py`/`requirements.txt`. Tool config
+  (black/isort @ 99) also lives here.
 - **Config via env / `.env`** — `src/config.py` reads everything via `os.getenv` with
   sensible defaults, so the project imports without a `.env`. Copy `.env.example` → `.env`
   to override. Never commit `.env`.
-- **Runners are scripts**, run as modules from the repo root, e.g.
-  `python3 src/models/train_model.py` or `python3 src/training_pipeline.py`.
+- **Runners are scripts**, run via Poetry from the repo root, e.g.
+  `poetry run python src/models/train_model.py` or `poetry run python src/training_pipeline.py`.
 
 ## Commands
 
-- Format: `black --line-length 99 src && isort --profile black --line-length 99 src`
-- Lint: `flake8 src` (config in `tox.ini`, line length **99**)
-- Verify (no test suite): `python3 -m compileall -q src/`
-- Full sweep: `python3 src/training_pipeline.py` (downloads OWID once → builds each data
-  condition once → trains across `SEEDS`).
-- Aggregate results: `python3 src/models/aggregate_results.py` (mean±std per condition).
+- Install: `poetry install` · run anything: `poetry run <cmd>` (or `poetry shell`)
+- Format: `make format` (`poetry run` isort+black @ 99)
+- Lint: `make lint` (`poetry run flake8 src`; config in `tox.ini`, line length **99**)
+- Verify (no test suite): `make verify` (`poetry run python -m compileall -q src`)
+- Full sweep: `poetry run python src/training_pipeline.py` (downloads OWID once → builds
+  each data condition once → trains across `SEEDS`).
+- Aggregate results: `poetry run python src/models/aggregate_results.py` (mean±std per condition).
 
 ## Package map (`src/`)
 
@@ -66,7 +71,10 @@ These have no automated test; a violation still "runs" but invalidates results.
    criterion as training. Metrics are normalized-scale; `mape` is masked + de-emphasized.
 5. **MLflow key contract.** Metric keys `{split}_ar_*` / `{split}_tf_*`; consumers
    (`aggregate_results.py`) must read keys logged byte-identically by `evaluate_model`. A
-   rename silently NaNs a column.
+   rename silently NaNs a column. The data condition logged by `train_model.py`
+   (alphas/stability/smoothing) is read from the `data_meta.json` sidecar
+   (`DATA_META_PATH`) written by `generate_data.py` + `process_data.py` — NOT from
+   re-entered CLI flags — so the logged condition can never drift from the actual data.
 6. **Reproducibility split.** `RANDOM_STATE` fixes data generation AND the split; `SEEDS`
    varies only model training (so reported variance is model variance). Seed via
    `seed_everything`.
@@ -81,8 +89,9 @@ These have no automated test; a violation still "runs" but invalidates results.
   black+isort after edits (best-effort if installed).
 - Artifact dirs are git-ignored and must stay out of git: `data/`, `models/`, `mlruns/`,
   `reports/`, `notebooks/`. Never `git add -f` them or any `.npy/.pt/.ipynb/...` file.
-- Verify edits with `python3 -m compileall -q src/` — there is no pytest suite and torch
-  may not be installed locally, so do NOT try to run training to "verify".
+- Verify edits with `make verify` (`poetry run python -m compileall -q src`) — there is no
+  pytest suite. Deps live in the Poetry `.venv`, so a quick smoke run is also possible
+  (e.g. `poetry run python src/models/train_model.py --seed 0` with small env overrides).
 
 ## Git & commits
 

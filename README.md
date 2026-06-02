@@ -7,7 +7,7 @@ Project Organization
 ------------
 
     ├── LICENSE
-    ├── Makefile           <- Makefile with commands like `make data` or `make train`
+    ├── Makefile           <- Makefile with commands like `make data` or `make verify`
     ├── README.md          <- The top-level README for developers using this project.
     ├── data
     │   ├── external       <- Data from third party sources.
@@ -28,11 +28,9 @@ Project Organization
     ├── reports            <- Generated analysis as HTML, PDF, LaTeX, etc.
     │   └── figures        <- Generated graphics and figures to be used in reporting
     │
-    ├── requirements.txt   <- The requirements file for reproducing the analysis environment, e.g.
-    │                         generated with `pip freeze > requirements.txt`
-    │
-    ├── setup.py           <- makes project pip installable (pip install -e .) so src can be imported
-    ├── src                <- Source code for use in this project.
+    ├── pyproject.toml     <- Project metadata, dependencies, and tool config (Poetry / PEP 621).
+    ├── poetry.lock        <- Pinned, resolved dependency versions (committed for reproducibility).
+    ├── src                <- Source code (full module list + descriptions in CLAUDE.md).
     │   ├── __init__.py    <- Makes src a Python module
     │   │
     │   ├── data           <- Scripts to download or generate data
@@ -64,11 +62,14 @@ https://www.cs.toronto.edu/~duvenaud/cookbook
 ## Set up project
 
 ```bash
-pip install -r requirements.txt
-cp .env.example .env  # then edit values as needed (see src/config.py)
-pre-commit install
-pre-commit run --all-files
+poetry install            # runtime + dev tooling into an in-project .venv
+cp .env.example .env       # then edit values as needed (see src/config.py)
+poetry run pre-commit install
+poetry run pre-commit run --all-files
 ```
+
+Run any command inside the environment with `poetry run <cmd>` (e.g.
+`poetry run python src/training_pipeline.py`) or open a shell with `poetry shell`.
 
 ## Training pipeline
 

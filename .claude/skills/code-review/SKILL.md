@@ -132,18 +132,14 @@ Applies to `src/models/utils.py`, the trainers, `src/models/aggregate_results.py
 
 ### Step 9: Run the static verification gate
 
-There is no pytest suite. Run the dependency-free checks the repo actually relies on:
+There is no pytest suite. Deps are managed by Poetry (in-project `.venv`). Run:
 
 ```bash
-python3 -m compileall -q src/      # syntax of all sources
+make verify          # poetry run python -m compileall -q src  (syntax of all sources)
+make pre-commit       # poetry run pre-commit run --all-files  (black/isort/flake8 @ 99 + scans)
 ```
 
-If black/isort/flake8 are installed (they may not be — best-effort), also run:
-
-```bash
-pre-commit run --all-files          # black/isort/flake8 @ 99 + large-file/secret scan
-```
-
+If Poetry is unavailable, fall back to `python3 -m compileall -q src/` (dependency-free).
 A compile failure is a critical finding. Also re-run the AST config-import check the
 Stop hook uses if `src/config.py` or any importer changed (imports must resolve).
 

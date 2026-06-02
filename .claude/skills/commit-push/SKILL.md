@@ -58,29 +58,29 @@ Invoke the `code-review` skill on the pending diff.
 
 ### Step 3: Run the verification gate
 
-This repo has no pytest suite and deps may not be installed. Run the dependency-free
-checks:
+This repo has no pytest suite. Deps are managed by Poetry (in-project `.venv`). Run:
 
 ```bash
-python3 -m compileall -q src/
+make verify          # poetry run python -m compileall -q src
 ```
 
-A compile failure is a stop-the-line failure: show it, fix obvious causes from the diff
-(e.g. an import-path drift after a rename, or a `from src.config import` name that no
-longer exists), and re-run. If `src/config.py` or any importer changed, re-run the
-AST config-import check (the same one the verify-changes Stop hook does). If it still
-fails, stop and ask.
+If Poetry isn't available, fall back to `python3 -m compileall -q src/` (the
+dependency-free check the verify-changes Stop hook also runs). A compile failure is a
+stop-the-line failure: show it, fix obvious causes from the diff (e.g. an import-path
+drift after a rename, or a `from src.config import` name that no longer exists), and
+re-run. If `src/config.py` or any importer changed, re-run the AST config-import check.
+If it still fails, stop and ask.
 
-If a tests/ suite exists, also run `python3 -m pytest -q`.
+If a tests/ suite exists, also run `poetry run pytest -q`.
 
-### Step 4: Run pre-commit hooks (if installed)
+### Step 4: Run pre-commit hooks
 
 ```bash
-pre-commit run --all-files
+make pre-commit      # poetry run pre-commit run --all-files
 ```
 
-If `pre-commit` is not installed, note "pre-commit not installed — skipped" and rely on
-the auto-format PostToolUse hook having already formatted edited files. If hooks run:
+If `pre-commit` is not available at all, note "pre-commit — skipped" and rely on the
+auto-format PostToolUse hook having already formatted edited files. If hooks run:
 black/isort/flake8/end-of-file/trailing-whitespace auto-fix on a re-run — re-run once. If
 they still fail after one auto-fix pass, stop and ask. Never bypass with `--no-verify`. If
 `check-added-large-files` or `detect-private-key` trips, do NOT force it — surface the
