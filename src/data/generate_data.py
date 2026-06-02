@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 
@@ -7,6 +8,7 @@ from scipy.stats import levy_stable
 
 from src.config import (
     COVID_SEQ_CHUNK_SIZE,
+    DATA_META_PATH,
     DATA_TYPE,
     FINAL_ALPHA,
     INITIAL_ALPHA,
@@ -147,6 +149,21 @@ def main(stability_period, initial_alpha, final_alpha):
 
     with open(SYNTHETIC_COVID_RAW_DATA_PATH, "wb") as f:
         np.save(f, synthetic_data)
+
+    # Record the generation condition so downstream training logs the TRUE condition
+    # (process_data.py enriches this with the smoothing_type it applies).
+    os.makedirs(os.path.dirname(DATA_META_PATH), exist_ok=True)
+    with open(DATA_META_PATH, "w") as f:
+        json.dump(
+            {
+                "data_type": DATA_TYPE,
+                "stability_period": stability_period,
+                "initial_alpha": initial_alpha,
+                "final_alpha": final_alpha,
+            },
+            f,
+            indent=2,
+        )
 
 
 if __name__ == "__main__":

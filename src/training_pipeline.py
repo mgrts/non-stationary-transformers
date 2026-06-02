@@ -63,24 +63,15 @@ def build_dataset(stability_period, initial_alpha, final_alpha, smoothing_type):
     run_step("src/data/make_dataset.py", [])
 
 
-def train_over_seeds(stability_period, initial_alpha, final_alpha, smoothing_type, seeds):
-    """Train the model once per seed on the already-built dataset."""
+def train_over_seeds(seeds):
+    """Train the model once per seed on the already-built dataset.
+
+    The data condition (alphas / stability / smoothing) is read by train_model
+    from the data_meta.json sidecar written during build_dataset, so only the
+    model seed varies here - the logged condition can never drift from the data.
+    """
     for seed in seeds:
-        run_step(
-            "src/models/train_model.py",
-            [
-                "--smoothing-type",
-                smoothing_type,
-                "--stability-period",
-                stability_period,
-                "--initial-alpha",
-                str(initial_alpha),
-                "--final-alpha",
-                str(final_alpha),
-                "--seed",
-                str(seed),
-            ],
-        )
+        run_step("src/models/train_model.py", ["--seed", str(seed)])
 
 
 def main():
@@ -104,7 +95,7 @@ def main():
         )
         try:
             build_dataset(stability_period, initial_alpha, final_alpha, smoothing_type)
-            train_over_seeds(stability_period, initial_alpha, final_alpha, smoothing_type, SEEDS)
+            train_over_seeds(SEEDS)
         except Exception as exc:
             logger.error(f"Condition failed {condition}: {exc}")
             failures.append(condition)

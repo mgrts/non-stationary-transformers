@@ -8,10 +8,9 @@ from torch.utils.data import DataLoader
 from src.config import (
     BS,
     CAUCHY_LOSS_GAMMA,
+    DATA_META_PATH,
     DATA_TYPE,
     FEATURE_DIM,
-    FINAL_ALPHA,
-    INITIAL_ALPHA,
     KERNEL_SIZE,
     LEAVE_RATIO,
     LOSS_TYPE,
@@ -23,15 +22,19 @@ from src.config import (
     NUM_LAYERS,
     PATIENCE,
     SEQUENCE_LENGTH,
-    SMOOTHING_TYPE,
-    STABILITY_PERIOD,
     TEST_DATA_PATH,
     TRACKING_URI,
     TRAIN_DATA_PATH,
     VAL_DATA_PATH,
 )
 from src.models.model import TransformerWithPE
-from src.models.utils import evaluate_model, make_criterion, train_model
+from src.models.utils import (
+    evaluate_model,
+    load_data_meta,
+    load_dataset,
+    make_criterion,
+    train_model,
+)
 from src.seeding import seed_everything
 
 EXPERIMENT_NAME = "initial experiments"
@@ -39,41 +42,23 @@ EXPERIMENT_NAME = "initial experiments"
 
 @click.command()
 @click.option(
-    "--smoothing-type",
-    default=SMOOTHING_TYPE,
-    help="Type of smoothing to apply (gaussian, sine, cosine, combined_cosine_gaussian)",
-)
-@click.option(
-    "--stability-period",
-    default=STABILITY_PERIOD,
-    type=click.Choice(["short", "moderate", "long"], case_sensitive=False),
-    help="Period of stability (short, moderate, long)",
-)
-@click.option(
-    "--initial-alpha",
-    default=INITIAL_ALPHA,
-    type=float,
-    help="Initial alpha value for generating sequences",
-)
-@click.option(
-    "--final-alpha",
-    default=FINAL_ALPHA,
-    type=float,
-    help="Final alpha value for generating sequences",
-)
-@click.option(
     "--seed", default=None, type=int, help="Model-training seed (variance source across runs)"
 )
-def main(smoothing_type, stability_period, initial_alpha, final_alpha, seed):
+def main(seed):
     logger = logging.getLogger(__name__)
     logger.info("Training model")
 
     if seed is not None:
         seed_everything(seed)
 
-    train_set = torch.load(TRAIN_DATA_PATH)
-    val_set = torch.load(VAL_DATA_PATH)
-    test_set = torch.load(TEST_DATA_PATH)
+    # The data condition (alphas, stability, smoothing) is a property of the data;
+    # read it from the sidecar so the logged MLflow condition is always the one the
+    # data was actually generated with - never a drifting re-entered CLI flag.
+    meta = load_data_meta(DATA_META_PATH)
+
+    train_set = load_dataset(TRAIN_DATA_PATH)
+    val_set = load_dataset(VAL_DATA_PATH)
+    test_set = load_dataset(TEST_DATA_PATH)
 
     train_loader = DataLoader(train_set, batch_size=BS, shuffle=True)
     val_loader = DataLoader(val_set, batch_size=BS, shuffle=False)
@@ -95,17 +80,17 @@ def main(smoothing_type, stability_period, initial_alpha, final_alpha, seed):
                 "loss_type": LOSS_TYPE,
                 "seed": seed,
                 "leave_ratio": LEAVE_RATIO,
-                "data_type": DATA_TYPE,
-                "smoothing_type": smoothing_type,
+                "data_type": meta.get("data_type", DATA_TYPE),
+                "smoothing_type": meta.get("smoothing_type"),
                 "kernel_size": KERNEL_SIZE,
                 "sequence_length": SEQUENCE_LENGTH,
                 "n_time_series": N_TIME_SERIES,
                 "feature_dim": FEATURE_DIM,
                 "num_heads": NUM_HEADS,
                 "num_layers": NUM_LAYERS,
-                "stability_period": stability_period,
-                "initial_alpha": initial_alpha,
-                "final_alpha": final_alpha,
+                "stability_period": meta.get("stability_period"),
+                "initial_alpha": meta.get("initial_alpha"),
+                "final_alpha": meta.get("final_alpha"),
             }
         )
         if LOSS_TYPE == "Cauchy":

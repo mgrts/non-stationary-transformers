@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 
@@ -8,6 +9,7 @@ from sklearn.preprocessing import RobustScaler, StandardScaler
 
 from src.config import (
     COVID_SEQ_CHUNK_SIZE,
+    DATA_META_PATH,
     INTERIM_DATA_PATH,
     KERNEL_SIZE,
     LEAVE_RATIO,
@@ -303,6 +305,17 @@ def main(smoothing_type):
 
     with open(OWID_GROUPS_PATH, "wb") as f:
         np.save(f, owid_groups)
+
+    # Enrich the data-generation metadata with the smoothing actually applied, so
+    # trainers can log the TRUE condition (alphas + stability from generate_data,
+    # smoothing from here) rather than re-reading their own CLI flags.
+    meta = {}
+    if os.path.exists(DATA_META_PATH):
+        with open(DATA_META_PATH) as f:
+            meta = json.load(f)
+    meta["smoothing_type"] = smoothing_type
+    with open(DATA_META_PATH, "w") as f:
+        json.dump(meta, f, indent=2)
 
 
 if __name__ == "__main__":

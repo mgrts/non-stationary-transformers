@@ -1,4 +1,6 @@
+import json
 import logging
+import os
 
 import mlflow
 import torch
@@ -12,6 +14,36 @@ from src.visualization.visualize import visualize_prediction
 log_fmt = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 logging.basicConfig(level=logging.INFO, format=log_fmt)
 logger = logging.getLogger(__name__)
+
+
+def load_dataset(path):
+    """Load a TensorDataset saved by make_dataset.py.
+
+    PyTorch >= 2.6 defaults ``torch.load`` to ``weights_only=True``, which
+    refuses to unpickle the ``TensorDataset`` objects we save. These files are
+    produced by our own pipeline (trusted), so we load them with
+    ``weights_only=False``.
+    """
+    return torch.load(path, weights_only=False)
+
+
+def load_data_meta(path):
+    """Read the data-generation condition sidecar written by the data pipeline.
+
+    Lets trainers log the TRUE condition the data was built with (alphas,
+    stability_period, smoothing_type, data_type) instead of re-reading their own
+    CLI flags, which can silently drift from how the data was generated. Returns
+    an empty dict if the sidecar is missing (older datasets / partial runs).
+    """
+    if not os.path.exists(path):
+        logger.warning(
+            "Data metadata sidecar %s not found; logged condition params may be incomplete. "
+            "Re-run generate_data.py + process_data.py to produce it.",
+            path,
+        )
+        return {}
+    with open(path) as f:
+        return json.load(f)
 
 
 # --- Sequence splitting -------------------------------------------------------

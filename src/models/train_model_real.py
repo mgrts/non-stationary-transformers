@@ -35,7 +35,7 @@ from src.config import (
     TRACKING_URI,
 )
 from src.models.model import LSTM, TransformerWithPE
-from src.models.utils import evaluate_model, make_criterion, train_model
+from src.models.utils import evaluate_model, load_dataset, make_criterion, train_model
 from src.seeding import seed_everything
 
 EXPERIMENT_NAME = "transfer-covid"
@@ -96,14 +96,14 @@ def main(smoothing_type, stability_period, initial_alpha, final_alpha, model_typ
         seed_everything(seed)
 
     logger.info("Loading synthetic (pre-training) dataset")
-    synthetic_train_set = torch.load(SYNTHETIC_COVID_TRAIN_DATA_PATH)
-    synthetic_val_set = torch.load(SYNTHETIC_COVID_VAL_DATA_PATH)
-    synthetic_test_set = torch.load(SYNTHETIC_COVID_TEST_DATA_PATH)
+    synthetic_train_set = load_dataset(SYNTHETIC_COVID_TRAIN_DATA_PATH)
+    synthetic_val_set = load_dataset(SYNTHETIC_COVID_VAL_DATA_PATH)
+    synthetic_test_set = load_dataset(SYNTHETIC_COVID_TEST_DATA_PATH)
 
     logger.info("Loading real-world (OWID) dataset")
-    real_train_set = torch.load(OWID_TRAIN_DATA_PATH)
-    real_val_set = torch.load(OWID_VAL_DATA_PATH)
-    real_test_set = torch.load(OWID_TEST_DATA_PATH)
+    real_train_set = load_dataset(OWID_TRAIN_DATA_PATH)
+    real_val_set = load_dataset(OWID_VAL_DATA_PATH)
+    real_test_set = load_dataset(OWID_TEST_DATA_PATH)
 
     synthetic_train_loader = DataLoader(synthetic_train_set, batch_size=BS, shuffle=True)
     synthetic_val_loader = DataLoader(synthetic_val_set, batch_size=BS, shuffle=False)

@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.config import BS, FIGURES_DIR, NUM_VIS_EXAMPLES, TEST_DATA_PATH, TRACKING_URI
-from src.models.utils import error_metrics, model_forward, prepare_batch
+from src.models.utils import error_metrics, load_dataset, model_forward, prepare_batch
 from src.visualization.visualize import visualize_prediction
 
 EXPERIMENT_NAME = "initial experiments"
@@ -75,7 +75,7 @@ def main(run_id, experiment_name, data_path, num_examples):
     model.eval()
 
     logger.info(f"Loading dataset from {data_path}")
-    dataset = torch.load(data_path)
+    dataset = load_dataset(data_path)
     loader = DataLoader(dataset, batch_size=BS, shuffle=False)
 
     os.makedirs(FIGURES_DIR, exist_ok=True)

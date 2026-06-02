@@ -35,11 +35,20 @@ CAUCHY_LOSS_GAMMA = float(os.getenv("CAUCHY_LOSS_GAMMA", "1.0"))
 
 RAW_DATA_PATH = os.path.join(PROJECT_ROOT_DIR, "data/raw/data.npy")
 INTERIM_DATA_PATH = os.path.join(PROJECT_ROOT_DIR, "data/interim/data.npy")
+# Sidecar JSON recording the data-generation condition (alphas, stability, smoothing)
+# so trainers log the TRUE condition the data was built with, instead of re-reading
+# their own CLI flags (which can drift from how the data was actually generated).
+DATA_META_PATH = os.path.join(PROJECT_ROOT_DIR, "data/interim/data_meta.json")
 PROCESSED_DATA_DIR = os.path.join(PROJECT_ROOT_DIR, "data/processed")
 MODELS_DIR = os.path.join(PROJECT_ROOT_DIR, "models")
 REPORTS_DIR = os.path.join(PROJECT_ROOT_DIR, "reports")
 FIGURES_DIR = os.path.join(REPORTS_DIR, "figures")
 TRACKING_URI = os.path.join(PROJECT_ROOT_DIR, "mlruns")
+
+# MLflow >= 3.x puts the filesystem tracking backend (./mlruns) in maintenance
+# mode and raises unless this opt-in is set. This project intentionally uses the
+# local file store, so enable it by default (overridable via the environment).
+os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
 
 SYNTHETIC_COVID_RAW_DATA_PATH = os.path.join(PROJECT_ROOT_DIR, "data/raw/synthetic_covid_data.npy")
 SYNTHETIC_COVID_INTERIM_DATA_PATH = os.path.join(
