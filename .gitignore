@@ -8,6 +8,10 @@ __pycache__/
 # Distribution / packaging
 .Python
 env/
+.venv/
+venv/
+# Poetry local config (machine-specific, e.g. virtualenvs.in-project)
+poetry.toml
 build/
 develop-eggs/
 dist/
@@ -95,3 +99,4 @@ target/
 *.parquet
 /mlruns/
 /models/
+/reports/

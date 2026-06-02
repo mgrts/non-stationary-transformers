@@ -1,19 +1,18 @@
 repos:
   - repo: https://github.com/mwouts/jupytext
-    rev: v1.13.7  # CURRENT_TAG/COMMIT_HASH
+    rev: v1.16.4
     hooks:
       - id: jupytext
         args: [ --from, ipynb, --to, "py:percent", --pipe, black ]
         additional_dependencies:
-          - black==20.8b1 # Matches hook
+          - black==24.4.2  # match the black hook below
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.1.0
+    rev: v4.6.0
     hooks:
       - id: check-added-large-files
         args: [ '--maxkb=10000' ]
       - id: trailing-whitespace
       - id: detect-private-key
-      - id: requirements-txt-fixer
       - id: end-of-file-fixer
 
   - repo: https://github.com/psf/black
@@ -24,14 +23,14 @@ repos:
         exclude: ADHOCS
 
   - repo: https://github.com/PyCQA/isort
-    rev: 5.12.0
+    rev: 5.13.2
     hooks:
       - id: isort
         args: [ --profile, black, --line-length, "99" ]
         exclude: ADHOCS
 
   - repo: https://github.com/PyCQA/flake8
-    rev: 4.0.1
+    rev: 7.1.1
     hooks:
       - id: flake8
         # .claude/ holds vendored Claude Code tooling (hooks); not project source.
